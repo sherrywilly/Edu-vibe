@@ -15,6 +15,7 @@ model Location {
   opensAt   DateTime?
   closesAt  DateTime?
   students  Student[]
+  examSchedules ExamSchedule[]
   createdAt DateTime  @default(now())
 }
 
@@ -38,6 +39,7 @@ model Student {
   locationId         String
   location           Location @relation(fields: [locationId], references: [id])
   createdAt          DateTime @default(now())
+  attempts           ExamAttempt[]
 
   @@index([parentPhone, dob])
 }
@@ -62,4 +64,67 @@ model RateLimit {
   key       String   @id
   count     Int      @default(0)
   expiresAt DateTime
+}
+
+model Exam {
+  id              String         @id @default(uuid())
+  title           String
+  durationMinutes Int
+  resultsPublished Boolean       @default(false)
+  createdAt       DateTime       @default(now())
+  questions       ExamQuestion[]
+  schedules       ExamSchedule[]
+  attempts        ExamAttempt[]
+}
+
+model ExamQuestion {
+  id            String       @id @default(uuid())
+  examId        String
+  exam          Exam         @relation(fields: [examId], references: [id], onDelete: Restrict)
+  position      Int
+  prompt        String
+  options       Json
+  correctOption Int
+  answers       ExamAnswer[]
+
+  @@unique([examId, position])
+}
+
+model ExamSchedule {
+  id         String   @id @default(uuid())
+  examId     String
+  exam       Exam     @relation(fields: [examId], references: [id], onDelete: Restrict)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  opensAt    DateTime
+  closesAt   DateTime
+
+  @@unique([examId, locationId])
+}
+
+model ExamAttempt {
+  id          String       @id @default(uuid())
+  examId      String
+  exam        Exam         @relation(fields: [examId], references: [id], onDelete: Restrict)
+  studentId   String
+  student     Student      @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  startedAt   DateTime
+  deadline    DateTime
+  submittedAt DateTime?
+  revision    Int          @default(0)
+  score       Int?
+  answers     ExamAnswer[]
+
+  @@unique([examId, studentId])
+  @@index([submittedAt, deadline])
+}
+
+model ExamAnswer {
+  attemptId  String
+  attempt    ExamAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId String
+  question   ExamQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  option     Int
+
+  @@id([attemptId, questionId])
 }

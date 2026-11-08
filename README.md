@@ -1,19 +1,23 @@
 # Edu Vibe
 
-**Status: incomplete prototype. Do not use for real student data or live examinations.** This repository currently implements a registration and login foundation, not the complete scholarship examination platform.
+**Status: limited MVP prototype. Do not use for real student data or live examinations.** This is not the complete scholarship examination platform.
 
 ## What works
 
 - Next.js responsive registration, student login and basic dashboard, plus a location administration screen.
 - NestJS API with PostgreSQL/Prisma migration. Admin-created seven-character random links resolve to a location on the server; registration stores the server-selected location separately from locality. Active/opening/closing status is checked on lookup and registration.
 - Phone-and-DOB student login, generic credential errors, registration-ID disambiguation, database-backed sessions and basic database-backed request limits. Consent and optional WhatsApp consent are recorded separately with timestamps and version numbers.
+- Searchable, paginated admin student list without DOB or contact fields, and configurable registration opening and closing times. Login limits use keyed identifiers, temporary cooldowns, and progressive delays.
+- Admins can create MCQ exams, schedule them by registration location and publish results. Students can start an eligible exam, save answers, resume, submit and see published scores. Server deadlines and scoring are authoritative; a running API process periodically recovers expired attempts.
 - Synthetic example location seed, and a Docker Compose development environment.
 
 ## Important gaps
 
-Exams, scheduling, attempts, autosave, background finalisation, scoring, results, PDF/CSV/XLSX imports and exports, certificates, QR codes, notifications, provider integrations, and their tests are **not implemented**. Redis is provisioned but unused; BullMQ and private document storage are not integrated. No WhatsApp, email, OCR or PDF provider was tested or configured, and no real messages are sent.
+PDF/CSV/XLSX imports and exports, certificates, QR codes, notifications and provider integrations are **not implemented**. Redis is provisioned but unused; BullMQ and private document storage are not integrated. No WhatsApp, email, OCR or PDF provider was tested or configured, and no real messages are sent.
 
-Admin authentication currently uses a single bootstrap password and an admin/student role distinction, not individual accounts, strong credential management, or the requested super-admin/exam-manager/reviewer permissions. There is no admin-assisted credential correction, retention/deletion workflow, managed options, school search, date-window editor, audit-log viewer, progressive login delays, monitoring or comprehensive validation. The current rate limiter uses the API connection IP; behind the Next.js proxy this can group users together and is not suitable for production. The application has not had a production security review. Do not deploy it publicly.
+Admin authentication currently uses a single bootstrap password and an admin/student role distinction, not individual accounts, strong credential management, or the requested super-admin/exam-manager/reviewer permissions. There is no admin-assisted credential correction, retention/deletion workflow, managed options, school search, audit-log viewer, monitoring or comprehensive validation. Registration windows can be set on creation but not edited later. The current rate limiter uses the API connection IP; behind the Next.js proxy this can group users together and is not suitable for production. The application has not had a production security review. Do not deploy it publicly.
+
+Exams are limited to immutable multiple-choice questions with one mark each and scheduling by registration location. Schedules cannot be edited or deleted. An API process must remain running for the recovery sweep; it is not a durable queue. Advanced cohort assignment, separate session durations, randomisation, attempt-device leases, question imports, configurable passing criteria, detailed result breakdowns and exam integrity event logs are not implemented.
 
 ## Local setup
 
@@ -32,4 +36,4 @@ For running without Compose, start PostgreSQL, then in `api` run `npm ci`, set `
 - `cd api && npm run build`
 - `cd web && npm run lint && npm run build`
 
-The API tests cover key status checks, server-side location assignment, shared-phone/DOB ambiguity and malformed dates. They do not establish readiness for real examinations or personal data.
+The API tests cover key status checks, server-side location assignment, shared-phone/DOB ambiguity and malformed dates. Exam integration tests require a disposable PostgreSQL database via `EXAM_TEST_DATABASE_URL` with the migrations applied. The exam UI was exercised with mock API responses, not as a full browser-to-database flow. These checks do not establish readiness for real examinations or personal data.
