@@ -35,6 +35,7 @@ import {
 } from './auth';
 import { validateRegistrationOptions } from './options.service';
 import { networkIdentity } from './network';
+import { safeWhatsappGroupUrl } from './whatsapp-group';
 
 const db = new PrismaClient();
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -232,8 +233,20 @@ export class AppController {
         whatsappConsentVersion: body.whatsappConsent === true ? '1' : null,
         locationId: location.id,
       },
+      select: {
+        registrationId: true,
+        location: { select: { name: true, whatsappGroupUrl: true } },
+      },
     });
-    return { registrationId: student.registrationId };
+    return {
+      registrationId: student.registrationId,
+      location: {
+        name: student.location.name,
+        whatsappGroupUrl: safeWhatsappGroupUrl(
+          student.location.whatsappGroupUrl,
+        ),
+      },
+    };
   }
 
   @Post('student/login')
@@ -296,11 +309,19 @@ export class AppController {
         registrationId: true,
         school: true,
         className: true,
-        location: { select: { name: true } },
+        location: { select: { name: true, whatsappGroupUrl: true } },
       },
     });
     if (!student) throw new UnauthorizedException();
-    return student;
+    return {
+      ...student,
+      location: {
+        ...student.location,
+        whatsappGroupUrl: safeWhatsappGroupUrl(
+          student.location.whatsappGroupUrl,
+        ),
+      },
+    };
   }
 
   @Post('admin/login')
@@ -511,9 +532,56 @@ export class AppController {
   @Get('admin/locations')
   async locations(@Req() req: Request) {
     await authenticateAdmin(db, req);
-    return db.location.findMany({
+    const locations = await db.location.findMany({
       include: { _count: { select: { students: true } } },
       orderBy: { createdAt: 'desc' },
+    });
+    return locations.map((location) => ({
+      ...location,
+      whatsappGroupUrl: safeWhatsappGroupUrl(location.whatsappGroupUrl),
+    }));
+  }
+
+  @Patch('admin/locations/:id/whatsapp-group')
+  async updateWhatsappGroup(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const actor = await authenticateAdmin(
+      db,
+      req,
+      ['super_admin', 'exam_manager'],
+      true,
+    );
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      !Object.hasOwn(body, 'whatsappGroupUrl') ||
+      Object.keys(body).length !== 1
+    )
+      throw new BadRequestException(
+        'A WhatsApp group URL or null is required.',
+      );
+    const value = (body as Record<string, unknown>).whatsappGroupUrl;
+    const whatsappGroupUrl = safeWhatsappGroupUrl(value);
+    if (value !== null && whatsappGroupUrl === null)
+      throw new BadRequestException('Invalid WhatsApp group URL.');
+    return db.$transaction(async (tx) => {
+      const result = await tx.location.updateMany({
+        where: { id },
+        data: { whatsappGroupUrl },
+      });
+      if (!result.count) throw new NotFoundException('Location not found.');
+      await tx.auditLog.create({
+        data: {
+          action: 'location.whatsapp_group.updated',
+          actor: actor.id,
+          target: id,
+        },
+      });
+      return { id, whatsappGroupUrl };
     });
   }
 

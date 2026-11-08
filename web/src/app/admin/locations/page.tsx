@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-type Location = { id: string; name: string; key: string; active: boolean; opensAt: string | null; closesAt: string | null; _count: { students: number } };
+type Location = { id: string; name: string; key: string; active: boolean; opensAt: string | null; closesAt: string | null; whatsappGroupUrl: string | null; _count: { students: number } };
 type Window = { opensAt: string | null; closesAt: string | null };
 type History = { id: string; action: string; actor: string; createdAt: string; details: { before: Window; after: Window } | null };
 
@@ -25,12 +25,14 @@ function display(value: string | null) { return value ? new Date(value).toLocale
 function LocationCard({ location, reload, canEdit }: { location: Location; reload: () => Promise<void>; canEdit: boolean }) {
   const [opensAt, setOpensAt] = useState(() => localInput(location.opensAt));
   const [closesAt, setClosesAt] = useState(() => localInput(location.closesAt));
+  const [groupUrl, setGroupUrl] = useState(location.whatsappGroupUrl ?? "");
   const [history, setHistory] = useState<History[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const historyPath = `/api/admin/locations/${encodeURIComponent(location.id)}/history`;
   useEffect(() => { setOpensAt(localInput(location.opensAt)); setClosesAt(localInput(location.closesAt)); }, [location.opensAt, location.closesAt]);
+  useEffect(() => { setGroupUrl(location.whatsappGroupUrl ?? ""); }, [location.whatsappGroupUrl]);
 
   async function loadHistory() { setHistory(await request<History[]>(historyPath)); }
   async function save(event: React.FormEvent) {
@@ -56,6 +58,18 @@ function LocationCard({ location, reload, canEdit }: { location: Location; reloa
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to save."); }
     finally { setBusy(false); }
   }
+  async function saveGroup(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setError(""); setMessage("");
+    try {
+      await request(`/api/admin/locations/${encodeURIComponent(location.id)}/whatsapp-group`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ whatsappGroupUrl: groupUrl.trim() || null }),
+      });
+      await reload();
+      setMessage("WhatsApp group invitation saved.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save invitation."); }
+    finally { setBusy(false); }
+  }
   return <section className="card">
     <h2>{location.name}</h2>
     <p>{location.active ? "Active" : "Inactive"} · {location._count.students} registrations · <Link href={`/register/${location.key}`}>Registration link</Link></p>
@@ -67,6 +81,11 @@ function LocationCard({ location, reload, canEdit }: { location: Location; reloa
       <label>Registration closes (local time)<input type="datetime-local" step="0.001" value={closesAt} onChange={event => setClosesAt(event.target.value)} /></label>
       <button disabled={busy}>{busy ? "Saving…" : "Save window"}</button>
     </form> : <p>Opens: {display(location.opensAt)}<br />Closes: {display(location.closesAt)}</p>}
+    {canEdit ? <form onSubmit={event => void saveGroup(event)}>
+      <label>WhatsApp group invitation URL (optional)<input type="url" value={groupUrl} onChange={event => setGroupUrl(event.target.value)} placeholder="https://chat.whatsapp.com/…" /></label>
+      <p>Use an official WhatsApp group invite link. Leave blank to remove it.</p>
+      <button disabled={busy}>{busy ? "Saving…" : "Save group invitation"}</button>
+    </form> : <p>WhatsApp group invitation: {location.whatsappGroupUrl ? "Configured" : "Not configured"}</p>}
     <button type="button" disabled={busy} onClick={() => { setError(""); void loadHistory().catch(e => setError(e instanceof Error ? e.message : "Unable to load history.")); }}>Show latest history</button>
     {history && <div><h3>Location history (latest 100)</h3>{history.length === 0 ? <p>No history available.</p> : <ul>{history.map(entry => <li key={entry.id}>
       <strong>{entry.action}</strong> · {entry.actor} · {new Date(entry.createdAt).toLocaleString()}

@@ -1,8 +1,11 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
+import WhatsAppInvitation from "../../components/whatsapp-invitation";
 
 type Option = { id: string; kind: string; name: string };
+type Registration = { registrationId: string; location: { name: string; whatsappGroupUrl: string | null } };
 
 export default function Register({ params }: { params: Promise<{ key: string }> }) {
   const { key } = use(params);
@@ -12,7 +15,7 @@ export default function Register({ params }: { params: Promise<{ key: string }> 
   const [busy, setBusy] = useState(false);
   const [same, setSame] = useState(false);
   const [parent, setParent] = useState("");
-  const [success, setSuccess] = useState("");
+  const [success, setSuccess] = useState<Registration | null>(null);
   const [options, setOptions] = useState<Option[]>([]);
   const [school, setSchool] = useState("");
   const [schoolSearch, setSchoolSearch] = useState("");
@@ -45,13 +48,17 @@ export default function Register({ params }: { params: Promise<{ key: string }> 
       });
       const result = await r.json();
       if (!r.ok) throw new Error(result.message);
-      setSuccess(result.registrationId);
+      setSuccess(result);
     } catch (e) { setError(e instanceof Error ? e.message : "Something went wrong."); }
     finally { setBusy(false); }
   }
 
   return <div className="form-wrap"><p className="eyebrow">Scholarship registration</p><h1>Let’s get started.</h1>
-    {loading ? <p>Loading registration link…</p> : success ? <div className="notice" role="status"><h2>Registration received!</h2><p>Your registration ID is <strong>{success}</strong>. Please save it; you may need it to sign in.</p></div> : location ? <>
+    {loading ? <p>Loading registration link…</p> : success ? <>
+      <div className="notice" role="status"><h2>Registration successful!</h2><p>Your registration ID is <strong>{success.registrationId}</strong>. Please save it; you may need it to sign in.</p></div>
+      <WhatsAppInvitation location={success.location} />
+      <div className="actions"><Link className="button secondary" href="/dashboard">Continue to dashboard</Link></div>
+    </> : location ? <>
       <p className="muted">Registering through <strong>{location}</strong>. Your residential locality is recorded separately.</p>
       {["district", "className", "medium", "syllabus"].some(kind => !options.some(item => item.kind === kind)) && <p className="notice error" role="alert">Registration options are not yet configured. Please contact the administrator.</p>}
       {error && <p className="notice error" role="alert">{error}</p>}

@@ -5,8 +5,18 @@ import { hashPassword, verifyPassword } from './auth';
 jest.mock('@prisma/client', () => {
   const instance = {
     $queryRaw: jest.fn().mockResolvedValue([{ count: 1 }]),
-    location: { findUnique: jest.fn(), create: jest.fn() },
-    student: { findMany: jest.fn(), create: jest.fn(), count: jest.fn() },
+    location: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    student: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      count: jest.fn(),
+    },
     registrationOption: { findMany: jest.fn() },
     session: {
       create: jest.fn(),
@@ -89,12 +99,20 @@ describe('registration and student authentication', () => {
   it('assigns the server-resolved location and keeps phone numbers separate', async () => {
     (db.location.findUnique as jest.Mock).mockResolvedValue({
       id: 'real-location',
+      name: 'North',
+      whatsappGroupUrl: 'https://chat.whatsapp.com/RealGroup123?mode=ac_t',
       active: true,
     });
     (db.student.create as jest.Mock).mockImplementation(({ data }) =>
-      Promise.resolve(data),
+      Promise.resolve({
+        ...data,
+        location: {
+          name: 'North',
+          whatsappGroupUrl: 'https://chat.whatsapp.com/RealGroup123?mode=ac_t',
+        },
+      }),
     );
-    await controller.register('ABCDEFG', req, {
+    const result = await controller.register('ABCDEFG', req, {
       name: 'Student',
       dob: '29/02/2020',
       school: 'School',
@@ -107,8 +125,20 @@ describe('registration and student authentication', () => {
       locality: 'Village',
       guardianConsent: true,
       locationId: 'forged',
+      location: {
+        name: 'Forged',
+        whatsappGroupUrl: 'https://chat.whatsapp.com/Forged',
+      },
+      whatsappGroupUrl: 'https://chat.whatsapp.com/Forged',
     });
 
+    expect(result).toEqual({
+      registrationId: expect.any(String),
+      location: {
+        name: 'North',
+        whatsappGroupUrl: 'https://chat.whatsapp.com/RealGroup123?mode=ac_t',
+      },
+    });
     expect(db.student.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -127,7 +157,10 @@ describe('registration and student authentication', () => {
       active: true,
     });
     (db.student.create as jest.Mock).mockImplementation(({ data }) =>
-      Promise.resolve(data),
+      Promise.resolve({
+        ...data,
+        location: { name: 'North', whatsappGroupUrl: null },
+      }),
     );
     const body = {
       name: 'Student',
@@ -143,7 +176,11 @@ describe('registration and student authentication', () => {
       locality: 'Village',
       guardianConsent: true,
     };
-    await controller.register('ABCDEFG', req, body);
+    await expect(
+      controller.register('ABCDEFG', req, body),
+    ).resolves.toMatchObject({
+      location: { name: 'North', whatsappGroupUrl: null },
+    });
     expect(db.student.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ school: 'New School' }),
@@ -153,6 +190,89 @@ describe('registration and student authentication', () => {
     await expect(controller.register('ABCDEFG', req, body)).rejects.toThrow(
       'currently available',
     );
+  });
+
+  it('uses the persisted assigned location, suppresses invalid URLs, and never exposes them on lookup', async () => {
+    (db.location.findUnique as jest.Mock).mockResolvedValue({
+      id: 'loc',
+      name: 'North',
+      active: true,
+      whatsappGroupUrl: 'https://evil.invalid/group',
+    });
+    (db.student.create as jest.Mock).mockResolvedValue({
+      registrationId: 'EV-1',
+      location: {
+        name: 'South',
+        whatsappGroupUrl: 'https://evil.invalid/group',
+      },
+    });
+    const body = {
+      name: 'Student',
+      dob: '29/02/2020',
+      school: 'School',
+      district: 'District',
+      className: 'Standard 4',
+      medium: 'English',
+      syllabus: 'Board',
+      parentPhone: '9876543210',
+      whatsappPhone: '9876543211',
+      locality: 'Village',
+      guardianConsent: true,
+    };
+    await expect(controller.resolve('ABCDEFG', req)).resolves.toEqual({
+      name: 'North',
+    });
+    await expect(controller.register('ABCDEFG', req, body)).resolves.toEqual({
+      registrationId: 'EV-1',
+      location: { name: 'South', whatsappGroupUrl: null },
+    });
+  });
+
+  it('returns only the authenticated student’s assigned location and filters invalid links', async () => {
+    const studentRequest = {
+      headers: { cookie: `edu_session=${'b'.repeat(64)}` },
+      query: { locationId: 'another-location' },
+    } as never;
+    (db.session.findUnique as jest.Mock).mockResolvedValue({
+      role: 'student',
+      studentId: 'student-1',
+      expiresAt: new Date(Date.now() + 10000),
+    });
+    (db.student.findUnique as jest.Mock).mockResolvedValue({
+      name: 'Student',
+      registrationId: 'EV-1',
+      school: 'School',
+      className: 'Standard 4',
+      location: {
+        name: 'North',
+        whatsappGroupUrl: 'https://chat.whatsapp.com/Group123?mode=ac_t',
+      },
+    });
+    await expect(controller.me(studentRequest)).resolves.toMatchObject({
+      location: {
+        name: 'North',
+        whatsappGroupUrl: 'https://chat.whatsapp.com/Group123?mode=ac_t',
+      },
+    });
+    expect(db.student.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'student-1' },
+        select: expect.objectContaining({
+          location: { select: { name: true, whatsappGroupUrl: true } },
+        }),
+      }),
+    );
+    (db.student.findUnique as jest.Mock).mockResolvedValueOnce({
+      location: {
+        name: 'North',
+        whatsappGroupUrl: 'https://chat.whatsapp.com/Group123?x=1',
+      },
+    });
+    await expect(controller.me(studentRequest)).resolves.toEqual({
+      location: { name: 'North', whatsappGroupUrl: null },
+    });
+    (db.student.findUnique as jest.Mock).mockResolvedValueOnce(null);
+    await expect(controller.me(studentRequest)).rejects.toThrow('Unauthorized');
   });
 
   it('requires a registration ID for identical phone and date matches', async () => {
@@ -206,6 +326,173 @@ describe('registration and student authentication', () => {
       headers: { cookie: `edu_session=${'a'.repeat(64)}` },
     } as never;
     await expect(controller.locations(studentRequest)).rejects.toThrow();
+  });
+
+  describe('WhatsApp group management', () => {
+    const adminRequest = {
+      headers: {
+        origin: 'http://localhost:3000',
+        cookie: `edu_session=${'a'.repeat(64)}`,
+      },
+    } as never;
+    const url = 'https://chat.whatsapp.com/Group123abc?mode=ac_t';
+
+    beforeEach(() => {
+      (db.session.findUnique as jest.Mock).mockResolvedValue({
+        role: 'admin',
+        adminId: 'admin-1',
+        expiresAt: new Date(Date.now() + 10000),
+      });
+      (db.location.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    });
+
+    it.each(['super_admin', 'exam_manager'])(
+      'allows %s to update and clear, auditing without URLs',
+      async (role) => {
+        (db.adminAccount.findUnique as jest.Mock).mockResolvedValue({
+          id: 'admin-1',
+          username: 'admin',
+          role,
+        });
+        await expect(
+          controller.updateWhatsappGroup(adminRequest, 'loc', {
+            whatsappGroupUrl: url,
+          }),
+        ).resolves.toEqual({ id: 'loc', whatsappGroupUrl: url });
+        expect(db.location.updateMany).toHaveBeenCalledWith({
+          where: { id: 'loc' },
+          data: { whatsappGroupUrl: url },
+        });
+        expect(db.auditLog.create).toHaveBeenCalledWith({
+          data: {
+            action: 'location.whatsapp_group.updated',
+            actor: 'admin-1',
+            target: 'loc',
+          },
+        });
+        await expect(
+          controller.updateWhatsappGroup(adminRequest, 'loc', {
+            whatsappGroupUrl: null,
+          }),
+        ).resolves.toEqual({ id: 'loc', whatsappGroupUrl: null });
+        expect(db.location.updateMany).toHaveBeenLastCalledWith({
+          where: { id: 'loc' },
+          data: { whatsappGroupUrl: null },
+        });
+        (db.auditLog.create as jest.Mock).mockRejectedValueOnce(
+          new Error('audit failed'),
+        );
+        await expect(
+          controller.updateWhatsappGroup(adminRequest, 'loc', {
+            whatsappGroupUrl: url,
+          }),
+        ).rejects.toThrow('audit failed');
+      },
+    );
+
+    it('rejects invalid URLs and malformed bodies before updating', async () => {
+      for (const value of [
+        '',
+        'http://chat.whatsapp.com/Group',
+        'https://chat.whatsapp.com',
+        'https://chat.whatsapp.com/',
+        'https://chat.whatsapp.com/Group/extra',
+        'https://chat.whatsapp.com/Group/',
+        'https://chat.whatsapp.com/Group?x=1',
+        'https://chat.whatsapp.com/Group?mode=',
+        'https://chat.whatsapp.com/Group?MODE=ac_t',
+        'https://chat.whatsapp.com/Group?mode=ac_t&redirect=https://evil.invalid',
+        'https://chat.whatsapp.com/Group?mode=ac_t&mode=other',
+        'https://chat.whatsapp.com/Group?mode=ac_t?redirect=evil',
+        'https://chat.whatsapp.com/Group?mode=ac%5Ft',
+        'https://chat.whatsapp.com/Group?mode=ac_t#fragment',
+        'https://chat.whatsapp.com/Group?mode=ac_t\n',
+        'https://chat.whatsapp.com/Group#x',
+        'https://chat.whatsapp.com:444/Group',
+        'https://chat.whatsapp.com.evil.invalid/Group',
+        'https://user@chat.whatsapp.com/Group',
+        'https://@chat.whatsapp.com/Group',
+        'https://chat.whatsapp.com/%47roup',
+        'https://chat.whatsapp.com/Group\n',
+        'https://chat.whatsapp.com/../Group',
+        42,
+        false,
+        undefined,
+      ]) {
+        await expect(
+          controller.updateWhatsappGroup(adminRequest, 'loc', {
+            whatsappGroupUrl: value,
+          }),
+        ).rejects.toThrow();
+      }
+      for (const body of [null, [], {}, { whatsappGroupUrl: url, other: 1 }]) {
+        await expect(
+          controller.updateWhatsappGroup(adminRequest, 'loc', body),
+        ).rejects.toThrow();
+      }
+      expect(db.location.updateMany).not.toHaveBeenCalled();
+      await expect(
+        controller.updateWhatsappGroup(adminRequest, 'loc', {
+          whatsappGroupUrl: 'https://chat.whatsapp.com:443/Group?mode=A-z_09',
+        }),
+      ).resolves.toMatchObject({
+        whatsappGroupUrl: 'https://chat.whatsapp.com:443/Group?mode=A-z_09',
+      });
+    });
+
+    it('rejects missing locations, unauthorised roles and cross-origin updates', async () => {
+      (db.location.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+      await expect(
+        controller.updateWhatsappGroup(adminRequest, 'missing', {
+          whatsappGroupUrl: url,
+        }),
+      ).rejects.toThrow('Location not found');
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+      (db.adminAccount.findUnique as jest.Mock).mockResolvedValue({
+        id: 'admin-1',
+        username: 'reviewer',
+        role: 'reviewer',
+      });
+      await expect(
+        controller.updateWhatsappGroup(adminRequest, 'loc', {
+          whatsappGroupUrl: url,
+        }),
+      ).rejects.toThrow('Forbidden');
+      const foreign = {
+        headers: {
+          origin: 'https://other.invalid',
+          cookie: `edu_session=${'a'.repeat(64)}`,
+        },
+      } as never;
+      await expect(
+        controller.updateWhatsappGroup(foreign, 'loc', {
+          whatsappGroupUrl: url,
+        }),
+      ).rejects.toThrow('Invalid request origin');
+      (db.session.findUnique as jest.Mock).mockResolvedValue({
+        role: 'student',
+        expiresAt: new Date(Date.now() + 10000),
+      });
+      await expect(
+        controller.updateWhatsappGroup(adminRequest, 'loc', {
+          whatsappGroupUrl: url,
+        }),
+      ).rejects.toThrow('Unauthorized');
+      expect(db.location.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('sanitizes stored URLs in the admin location list', async () => {
+      (db.location.findMany as jest.Mock).mockResolvedValue([
+        { name: 'North', whatsappGroupUrl: url },
+        { name: 'South', whatsappGroupUrl: 'https://evil.invalid/' },
+        { name: 'West', whatsappGroupUrl: null },
+      ]);
+      await expect(controller.locations(adminRequest)).resolves.toEqual([
+        { name: 'North', whatsappGroupUrl: url },
+        { name: 'South', whatsappGroupUrl: null },
+        { name: 'West', whatsappGroupUrl: null },
+      ]);
+    });
   });
 
   it('rejects cross-origin registration', async () => {

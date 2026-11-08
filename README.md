@@ -11,6 +11,7 @@
 - Individual admin accounts use scrypt passwords, with super-admin, exam-manager and reviewer permissions enforced by the API. Legacy shared-password admin sessions are invalidated by the migration. Admins can manage registration options and edit registration windows.
 - Admins can create MCQ exams, schedule them by registration location and publish results. Students can start an eligible exam, save answers, resume, submit and see published scores. Server deadlines and scoring are authoritative. A dedicated BullMQ worker reconciles deadline jobs and periodically sweeps overdue attempts.
 - Admins can preview and confirm small CSV student imports with recorded consent evidence. Filtered student CSV and individual admin-only PDF acknowledgements are available. Imports require review; they do not establish consent or verified contact ownership.
+- Administrators can optionally configure a WhatsApp group invitation per registration location. After registration and on the student dashboard, guardians can choose to open their location's invite; joining is not required and may reveal their phone number to other group members. This does not send messages or verify membership.
 - Synthetic example location seed, and a Docker Compose development environment.
 
 ## Important gaps

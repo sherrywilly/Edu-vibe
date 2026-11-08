@@ -10,6 +10,7 @@ datasource db {
 model Location {
   id        String    @id @default(uuid())
   name      String
+  whatsappGroupUrl String?
   key       String    @unique @db.VarChar(7)
   active    Boolean   @default(true)
   opensAt   DateTime?
