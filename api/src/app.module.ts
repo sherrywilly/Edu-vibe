@@ -12,9 +12,10 @@ import { ExportService } from './export.service';
 import { QuestionImportModule } from './question-import.module';
 import { AttemptNotesController } from './attempt-notes.controller';
 import { AttemptNotesService } from './attempt-notes.service';
+import { HealthModule } from './health.module';
 
 @Module({
-  imports: [QuestionImportModule],
+  imports: [QuestionImportModule, HealthModule],
   controllers: [
     AppController,
     ExamController,

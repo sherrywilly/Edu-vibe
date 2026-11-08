@@ -1,9 +1,11 @@
 import { Logger } from '@nestjs/common';
 import { DelayedError, Job, Queue, Worker } from 'bullmq';
 import { ExamService } from './exam.service';
+import { HealthProbe } from './health-probe';
 
 const QUEUE_NAME = 'exam-deadlines';
 const INTERVAL_MS = 30_000;
+const DATABASE_HEARTBEAT_MAX_AGE_MS = INTERVAL_MS * 3;
 
 export class ExamDeadlineWorker {
   private readonly logger = new Logger(ExamDeadlineWorker.name);
@@ -14,6 +16,8 @@ export class ExamDeadlineWorker {
   private sweeping?: Promise<void>;
   private stopping = false;
   private workerReady = false;
+  private lastDatabaseSuccess = 0;
+  private readonly redisHealth: HealthProbe;
   private lastRedisWarning = 0;
   private stopReconciliation!: () => void;
   private readonly stopSignal = new Promise<void>((resolve) => {
@@ -59,7 +63,10 @@ export class ExamDeadlineWorker {
       },
     );
     this.queue.on('error', () => this.warnRedisUnavailable());
-    this.worker.on('error', () => this.warnRedisUnavailable());
+    this.worker.on('error', () => {
+      this.workerReady = false;
+      this.warnRedisUnavailable();
+    });
     this.worker.on('ready', () => {
       this.workerReady = true;
     });
@@ -67,6 +74,42 @@ export class ExamDeadlineWorker {
       this.workerReady = false;
     });
     this.worker.on('failed', () => this.logger.warn('Deadline job failed'));
+    this.redisHealth = new HealthProbe(async () => {
+      const blockingClient = this.worker.getBackend().blockingClient;
+      if (!blockingClient) return false;
+      const [queueClient, workerClient, blocking] = await Promise.all([
+        this.queue.getBackend().client,
+        this.worker.getBackend().client,
+        blockingClient,
+      ]);
+      const ready = () =>
+        [queueClient, workerClient, blocking].every(
+          (client) => client.status === 'ready',
+        );
+      if (!ready()) return false;
+      await Promise.all([
+        queueClient.get(this.queue.toKey('health-check')),
+        workerClient.get(this.queue.toKey('health-check')),
+      ]);
+      return ready();
+    });
+  }
+
+  async health(): Promise<{ database: boolean; redis: boolean }> {
+    const active = () =>
+      !this.stopping &&
+      !!this.timer &&
+      this.worker.isRunning() &&
+      !this.worker.isPaused();
+    const redis = active() && (await this.redisHealth.run()) && active();
+    return {
+      database:
+        !this.stopping &&
+        !!this.timer &&
+        this.lastDatabaseSuccess > 0 &&
+        Date.now() - this.lastDatabaseSuccess < DATABASE_HEARTBEAT_MAX_AGE_MS,
+      redis,
+    };
   }
 
   private warnRedisUnavailable() {
@@ -114,7 +157,14 @@ export class ExamDeadlineWorker {
     try {
       let after: string | undefined;
       while (!this.stopping) {
-        const attempts = await this.service.pendingDeadlines(after);
+        let attempts: Awaited<ReturnType<ExamService['pendingDeadlines']>>;
+        try {
+          attempts = await this.service.pendingDeadlines(after);
+          this.lastDatabaseSuccess = Date.now();
+        } catch (error) {
+          this.lastDatabaseSuccess = 0;
+          throw error;
+        }
         for (const attempt of attempts) {
           if (this.stopping) return;
           await Promise.race([
