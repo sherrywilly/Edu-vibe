@@ -1,0 +1,200 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Location {
+  id        String    @id @default(uuid())
+  name      String
+  whatsappGroupUrl String?
+  key       String    @unique @db.VarChar(7)
+  active    Boolean   @default(true)
+  opensAt   DateTime?
+  closesAt  DateTime?
+  students  Student[]
+  examSchedules ExamSchedule[]
+  createdAt DateTime  @default(now())
+}
+
+model Student {
+  id                 String   @id @default(uuid())
+  registrationId     String   @unique
+  name               String
+  dob                DateTime @db.Date
+  school             String
+  district           String
+  className          String
+  medium             String
+  syllabus           String
+  parentPhone        String
+  whatsappPhone      String
+  locality           String
+  guardianConsentAt  DateTime
+  guardianConsentVersion String
+  whatsappConsentAt  DateTime?
+  whatsappConsentVersion String?
+  locationId         String
+  location           Location @relation(fields: [locationId], references: [id])
+  createdAt          DateTime @default(now())
+  attempts           ExamAttempt[]
+  examSelections     ExamScheduleStudent[]
+
+  @@index([parentPhone, dob])
+}
+
+model Session {
+  id        String   @id
+  role      String
+  studentId String?
+  adminId   String?
+  admin     AdminAccount? @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+}
+
+model AdminAccount {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  role         String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+model RegistrationOption {
+  id        String   @id @default(uuid())
+  kind      String
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([kind, name])
+  @@index([kind, active])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  actor     String
+  target    String?
+  createdAt DateTime @default(now())
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+}
+
+model Exam {
+  id              String         @id @default(uuid())
+  title           String
+  durationMinutes Int
+  passingScore    Int?
+  shuffleQuestions Boolean       @default(false)
+  shuffleOptions   Boolean       @default(false)
+  resultsPublished Boolean       @default(false)
+  createdAt       DateTime       @default(now())
+  questions       ExamQuestion[]
+  schedules       ExamSchedule[]
+  attempts        ExamAttempt[]
+}
+
+model ExamQuestion {
+  id            String       @id @default(uuid())
+  examId        String
+  exam          Exam         @relation(fields: [examId], references: [id], onDelete: Restrict)
+  position      Int
+  prompt        String
+  options       Json
+  correctOption Int
+  subject       String       @default("General")
+  marks         Int          @default(1)
+  negativeMarks Int          @default(0)
+  answers       ExamAnswer[]
+  reviewFlags   ExamReviewFlag[]
+
+  @@unique([examId, position])
+}
+
+model ExamSchedule {
+  id         String   @id @default(uuid())
+  examId     String
+  exam       Exam     @relation(fields: [examId], references: [id], onDelete: Restrict)
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  opensAt    DateTime
+  closesAt   DateTime
+  durationMinutes Int
+  eligibilityType String @default("location")
+  eligibilityValue String?
+  cancelledAt DateTime?
+  selectedStudents ExamScheduleStudent[]
+
+  @@index([examId])
+}
+
+model ExamScheduleStudent {
+  scheduleId String
+  studentId String
+  schedule ExamSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@id([scheduleId, studentId])
+  @@index([studentId])
+}
+
+model ExamAttempt {
+  id          String       @id @default(uuid())
+  examId      String
+  exam        Exam         @relation(fields: [examId], references: [id], onDelete: Restrict)
+  studentId   String
+  student     Student      @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  startedAt   DateTime
+  deadline    DateTime
+  submittedAt DateTime?
+  revision    Int          @default(0)
+  score       Int?
+  randomizationLayout Json?
+  answers     ExamAnswer[]
+  reviewFlags ExamReviewFlag[]
+  focusEvents ExamFocusEvent[]
+
+  @@unique([examId, studentId])
+  @@index([submittedAt, deadline])
+}
+
+model ExamAnswer {
+  attemptId  String
+  attempt    ExamAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId String
+  question   ExamQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  option     Int
+
+  @@id([attemptId, questionId])
+}
+
+model ExamReviewFlag {
+  attemptId String
+  questionId String
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question ExamQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@id([attemptId, questionId])
+}
+
+model ExamFocusEvent {
+  id String @id @default(uuid())
+  attemptId String
+  type String
+  createdAt DateTime @default(now())
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
+}
