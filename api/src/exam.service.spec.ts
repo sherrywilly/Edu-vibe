@@ -207,6 +207,123 @@ integration('exam transactions (PostgreSQL)', () => {
     );
   });
 
+  it('validates and persists weighted scoring and publishes only safe breakdowns', async () => {
+    const baseQuestion = { prompt: '?', options: ['A', 'B'], correctOption: 0 };
+    for (const extra of [
+      { marks: 0 },
+      { negativeMarks: -1 },
+      { subject: ' ' },
+    ]) {
+      await expect(
+        service.createExam({
+          title: 'Invalid',
+          durationMinutes: 5,
+          questions: [{ ...baseQuestion, ...extra }],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+    await expect(
+      service.createExam({
+        title: 'Invalid',
+        durationMinutes: 5,
+        passingScore: 2,
+        questions: [baseQuestion],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.createExam({
+        title: 'Overflow',
+        durationMinutes: 5,
+        questions: [{ ...baseQuestion, marks: 2147483647 }, baseQuestion],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    const exam = await service.createExam({
+      title: 'Weighted',
+      durationMinutes: 5,
+      passingScore: 3,
+      questions: [
+        { ...baseQuestion, subject: 'Math', marks: 4, negativeMarks: 1 },
+        { ...baseQuestion, subject: 'Math', marks: 2, negativeMarks: 2 },
+        { ...baseQuestion, subject: 'Science', marks: 1 },
+      ],
+    });
+    try {
+      const questions = await db.examQuestion.findMany({
+        where: { examId: exam.id },
+        orderBy: { position: 'asc' },
+      });
+      expect(
+        questions.map((q) => [q.subject, q.marks, q.negativeMarks]),
+      ).toEqual([
+        ['Math', 4, 1],
+        ['Math', 2, 2],
+        ['Science', 1, 0],
+      ]);
+      await service.schedule(exam.id, {
+        locationId,
+        opensAt: new Date(Date.now() + 86400000).toISOString(),
+        closesAt: new Date(Date.now() + 86500000).toISOString(),
+      });
+      const attempt = await db.examAttempt.create({
+        data: {
+          examId: exam.id,
+          studentId,
+          startedAt: new Date(),
+          deadline: new Date(Date.now() + 60000),
+          answers: {
+            create: [
+              { questionId: questions[0].id, option: 0 },
+              { questionId: questions[1].id, option: 1 },
+            ],
+          },
+        },
+      });
+      const submitted = await service.submit(attempt.id, studentId);
+      expect(submitted).not.toHaveProperty('breakdown');
+      expect(submitted).not.toHaveProperty('score');
+      expect(JSON.stringify(submitted)).not.toContain('correctOption');
+      expect(
+        (await db.examAttempt.findUniqueOrThrow({ where: { id: attempt.id } }))
+          .score,
+      ).toBe(2);
+      await service.publish(exam.id, { published: true });
+      const result = await service.getAttempt(attempt.id, studentId);
+      expect(result).toMatchObject({
+        score: 2,
+        total: 7,
+        breakdown: {
+          score: 2,
+          total: 7,
+          correct: 1,
+          incorrect: 1,
+          unanswered: 1,
+          passingScore: 3,
+          passed: false,
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain('correctOption');
+      const listed = (await service.listStudent(studentId)).find(
+        (item) => item.id === exam.id,
+      );
+      expect(listed?.attempt).toMatchObject({
+        score: 2,
+        total: 7,
+        passingScore: 3,
+        passed: false,
+      });
+    } finally {
+      await db.examAnswer.deleteMany({
+        where: { attempt: { examId: exam.id } },
+      });
+      await db.examAttempt.deleteMany({ where: { examId: exam.id } });
+      await db.examSchedule.deleteMany({ where: { examId: exam.id } });
+      await db.examQuestion.deleteMany({ where: { examId: exam.id } });
+      await db.exam.deleteMany({ where: { id: exam.id } });
+      await db.auditLog.deleteMany({ where: { target: exam.id } });
+    }
+  });
+
   it('rejects concurrent overlapping schedules and audits admin changes', async () => {
     const make = () =>
       service.createExam({

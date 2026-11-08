@@ -9,9 +9,12 @@ import { ImportController } from './import.controller';
 import { ImportService } from './import.service';
 import { ExportController } from './export.controller';
 import { ExportService } from './export.service';
+import { QuestionImportModule } from './question-import.module';
+import { AttemptNotesController } from './attempt-notes.controller';
+import { AttemptNotesService } from './attempt-notes.service';
 
 @Module({
-  imports: [],
+  imports: [QuestionImportModule],
   controllers: [
     AppController,
     ExamController,
@@ -19,7 +22,8 @@ import { ExportService } from './export.service';
     LocationController,
     ImportController,
     ExportController,
+    AttemptNotesController,
   ],
-  providers: [ExamService, LocationService, ImportService, ExportService],
+  providers: [ExamService, LocationService, ImportService, ExportService, AttemptNotesService],
 })
 export class AppModule {}

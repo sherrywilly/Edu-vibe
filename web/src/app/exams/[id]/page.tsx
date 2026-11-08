@@ -7,8 +7,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Answer = { questionId: string; option: number };
 type Attempt = {
   id: string; status: "in_progress" | "submitted"; deadline: string; serverNow: string;
-  revision: number; questions: { id: string; prompt: string; options: string[] }[];
+  revision: number; questions: { id: string; prompt: string; options: string[]; subject?: string; marks?: number; negativeMarks?: number }[];
   answers: Answer[]; score?: number; total?: number; requestStarted: number;
+  breakdown?: { correct: number; incorrect: number; unanswered: number; passingScore: number | null; passed: boolean | null; subjects: { subject: string; score: number; total: number; correct: number; incorrect: number; unanswered: number }[] };
 };
 type SaveState = "saved" | "saving" | "unsaved";
 
@@ -37,6 +38,10 @@ export default function ExamAttempt() {
   const [submitting, setSubmitting] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [flagged, setFlagged] = useState<string[]>([]);
+  const [flagsLoaded, setFlagsLoaded] = useState(false);
+  const [flagSaving, setFlagSaving] = useState(false);
+  const [flagError, setFlagError] = useState("");
+  const [recordEvents, setRecordEvents] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
   const [fullscreenMessage, setFullscreenMessage] = useState("");
@@ -51,6 +56,8 @@ export default function ExamAttempt() {
   const finalized = useRef(false);
   const submitInProgress = useRef(false);
   const mounted = useRef(true);
+  const flagInFlight = useRef(false);
+  const recordable = attempt?.status === "in_progress" && remaining !== 0;
 
   const syncClock = useCallback((data: Attempt) => {
     const serverNow = Date.parse(data.serverNow);
@@ -71,6 +78,45 @@ export default function ExamAttempt() {
     void load().catch(e => { if (mounted.current) setError(e.message); });
     return () => { mounted.current = false; if (timer.current) clearTimeout(timer.current); };
   }, [load]);
+  const loadFlags = useCallback(async () => {
+    setFlagsLoaded(false); setFlagError("");
+    try {
+      const response = await fetch(`${path}/notes`, { cache: "no-store" });
+      if (!response.ok) throw new Error();
+      const data: { flaggedQuestionIds: string[] } = await response.json();
+      if (mounted.current) { setFlagged(data.flaggedQuestionIds); setFlagsLoaded(true); }
+    } catch {
+      if (mounted.current) setFlagError("Could not load review flags. Please retry.");
+    }
+  }, [path]);
+  useEffect(() => { void loadFlags(); }, [loadFlags]);
+  useEffect(() => {
+    if (!recordEvents || !recordable) return;
+    let lastSent = 0;
+    const record = (type: string) => {
+      const now = performance.now();
+      if (lastSent && now - lastSent < 1000) return;
+      lastSent = now;
+      void fetch(`${path}/events`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }), keepalive: true,
+      }).catch(() => {});
+    };
+    const focus = () => record("focus");
+    const blur = () => record("blur");
+    const visibility = () => record(document.hidden ? "hidden" : "visible");
+    const fullscreenChange = () => record(document.fullscreenElement ? "fullscreen_enter" : "fullscreen_exit");
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", visibility);
+    document.addEventListener("fullscreenchange", fullscreenChange);
+    return () => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", visibility);
+      document.removeEventListener("fullscreenchange", fullscreenChange);
+    };
+  }, [recordEvents, recordable, path]);
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === document.documentElement);
     setFullscreenAvailable(Boolean(document.fullscreenEnabled && document.documentElement.requestFullscreen));
@@ -80,12 +126,12 @@ export default function ExamAttempt() {
   }, []);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (editVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
+      if (editVersion.current !== savedVersion.current || flagInFlight.current) { event.preventDefault(); event.returnValue = ""; }
     };
     const warnLink = (event: MouseEvent) => {
-      if (editVersion.current === savedVersion.current || !(event.target instanceof Element)) return;
+      if ((editVersion.current === savedVersion.current && !flagInFlight.current) || !(event.target instanceof Element)) return;
       const link = event.target.closest("a[href]");
-      if (link && !window.confirm("Some answers are not saved yet. Leave anyway?")) {
+      if (link && !window.confirm("Some changes are not saved yet. Leave anyway?")) {
         event.preventDefault(); event.stopPropagation();
       }
     };
@@ -151,8 +197,26 @@ export default function ExamAttempt() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void save().catch(() => {}); }, 400);
   }
+  async function toggleFlag(questionId: string) {
+    if (flagInFlight.current || !flagsLoaded) return;
+    const next = !flagged.includes(questionId);
+    flagInFlight.current = true; setFlagSaving(true); setFlagError("");
+    try {
+      const response = await fetch(`${path}/flags/${encodeURIComponent(questionId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flagged: next }),
+      });
+      if (!response.ok) throw new Error();
+      if (mounted.current) setFlagged(current => next ? [...current.filter(id => id !== questionId), questionId] : current.filter(id => id !== questionId));
+    } catch {
+      if (mounted.current) setFlagError("Could not save your review flag. Please try again.");
+    } finally {
+      flagInFlight.current = false;
+      if (mounted.current) setFlagSaving(false);
+    }
+  }
   async function submit() {
-    if (submitInProgress.current || finalized.current || remaining === 0) return;
+    if (submitInProgress.current || finalized.current || remaining === 0 || flagInFlight.current) return;
     submitInProgress.current = true;
     setSubmitting(true); setError("");
     if (timer.current) clearTimeout(timer.current);
@@ -175,7 +239,7 @@ export default function ExamAttempt() {
     }
   }
   function leave() {
-    if (editVersion.current !== savedVersion.current && !window.confirm("Some answers are not saved yet. Leave anyway?")) return;
+    if ((editVersion.current !== savedVersion.current || flagInFlight.current) && !window.confirm("Some changes are not saved yet. Leave anyway?")) return;
     router.push("/exams");
   }
   const question = attempt?.questions[questionIndex];
@@ -186,6 +250,11 @@ export default function ExamAttempt() {
     {!attempt ? <>{!error ? <p>Loading your exam…</p> : <><p><Link href="/exams">Back to my exams</Link></p><button onClick={() => void load().catch(e => setError(e.message))}>Try again</button></>}</> :
       attempt.status === "submitted" ? <>
         <p>Your exam has been submitted. {attempt.score != null && attempt.total != null ? `Your score: ${attempt.score} / ${attempt.total}.` : "Your results will appear when they are published."}</p>
+        {attempt.breakdown && <section aria-label="Result breakdown">
+          {attempt.breakdown.passed !== null && <p>{attempt.breakdown.passed ? "Passed" : "Not passed"} (passing score: {attempt.breakdown.passingScore}).</p>}
+          <p>Correct: {attempt.breakdown.correct} · Incorrect: {attempt.breakdown.incorrect} · Unanswered: {attempt.breakdown.unanswered}</p>
+          <ul>{attempt.breakdown.subjects.map(subject => <li key={subject.subject}>{subject.subject}: {subject.score} / {subject.total} · {subject.correct} correct, {subject.incorrect} incorrect, {subject.unanswered} unanswered</li>)}</ul>
+        </section>}
         {fullscreen && <button type="button" onClick={() => void toggleFullscreen()}>Exit full screen</button>}
         {fullscreenMessage && <p role="status">{fullscreenMessage}</p>}
         <Link className="button" href="/exams">Back to my exams</Link>
@@ -194,13 +263,17 @@ export default function ExamAttempt() {
         <p role="status">{saveState === "saved" ? "All answers saved" : saveState === "saving" ? "Saving your answers…" : "Answers not saved yet"}</p>
         {fullscreenAvailable && <button type="button" onClick={() => void toggleFullscreen()}>{fullscreen ? "Exit full screen" : "Use full screen (optional)"}</button>}
         {fullscreenMessage && <p role="status">{fullscreenMessage}</p>}
+        <label className="check"><input type="checkbox" checked={recordEvents} onChange={event => setRecordEvents(event.target.checked)} /> Allow logging focus, visibility and full-screen changes during this visit (optional)</label>
+        <p>If enabled, these events are stored with your attempt and can be viewed by administrators. They are informational only, may be limited or missed, and do not affect your score or submission.</p>
+        {flagError && <p className="notice error" role="alert">{flagError} {!flagsLoaded && <button type="button" onClick={() => void loadFlags()}>Retry loading flags</button>}</p>}
+        {flagSaving && <p role="status">Saving review flag…</p>}
         {saveState === "unsaved" && error && <div className="actions"><button type="button" onClick={() => void save().catch(() => {})}>Retry saving</button><button type="button" onClick={() => {
           if (window.confirm("Reload the saved answers? Unsaved changes on this device will be lost.")) void load().catch(e => setError(e.message));
         }}>Reload saved answers</button></div>}
         {reviewing ? <section className="card" aria-labelledby="review-heading">
           <h2 id="review-heading">Let&apos;s check your answers</h2>
           <p>You answered {answers.length} of {attempt.questions.length} questions. You can go back to any question before submitting.</p>
-          <p>Flags are reminders on this page only and won&apos;t be saved if you leave or reload.</p>
+          <p>Review flags are saved reminders and do not affect your score.</p>
           <ul>
             {attempt.questions.map((item, index) => <li key={item.id}>
               <button type="button" disabled={submitting} onClick={() => { setQuestionIndex(index); setReviewing(false); }}>
@@ -211,11 +284,12 @@ export default function ExamAttempt() {
           <p>Once you submit, you can&apos;t change your answers.</p>
           <div className="actions">
             <button type="button" disabled={submitting} onClick={() => setReviewing(false)}>Keep working</button>
-            <button type="button" disabled={submitting || remaining === 0} onClick={() => void submit()}>{submitting ? "Submitting…" : "Submit my exam"}</button>
+            <button type="button" disabled={submitting || flagSaving || remaining === 0} onClick={() => void submit()}>{submitting ? "Submitting…" : "Submit my exam"}</button>
           </div>
         </section> : <>
         {question && <section className="card">
           <p>Question {questionIndex + 1} of {attempt.questions.length}</p>
+          {question.subject && <p>{question.subject} · {question.marks} marks · {question.negativeMarks} deducted for an incorrect answer</p>}
           <fieldset disabled={submitting || remaining === 0}>
             <legend><strong>{question.prompt}</strong></legend>
             {question.options.map((option, index) => <label className="check" key={index}>
@@ -223,7 +297,7 @@ export default function ExamAttempt() {
             </label>)}
           </fieldset>
           <button type="button" disabled={submitting || remaining === 0 || !answers.some(answer => answer.questionId === question.id)} onClick={() => choose(question.id, null)}>Clear answer</button>
-          <button type="button" disabled={submitting || remaining === 0} aria-pressed={flagged.includes(question.id)} onClick={() => setFlagged(current => current.includes(question.id) ? current.filter(id => id !== question.id) : [...current, question.id])}>
+          <button type="button" disabled={submitting || flagSaving || !flagsLoaded || remaining === 0} aria-pressed={flagged.includes(question.id)} onClick={() => void toggleFlag(question.id)}>
             {flagged.includes(question.id) ? "Remove review flag" : "Flag for review"}
           </button>
           {flagged.includes(question.id) && <p>Flagged for review</p>}

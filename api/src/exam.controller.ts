@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -49,6 +50,37 @@ export class ExamController {
       true,
     );
     return this.exams.schedule(id, body, admin.id);
+  }
+
+  @Put('admin/exams/:id/schedules/:scheduleId')
+  async updateSchedule(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('scheduleId') scheduleId: string,
+    @Body() body: unknown,
+  ) {
+    const admin = await authenticateAdmin(
+      db,
+      req,
+      ['super_admin', 'exam_manager'],
+      true,
+    );
+    return this.exams.schedule(id, body, admin.id, scheduleId);
+  }
+
+  @Delete('admin/exams/:id/schedules/:scheduleId')
+  async cancelSchedule(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('scheduleId') scheduleId: string,
+  ) {
+    const admin = await authenticateAdmin(
+      db,
+      req,
+      ['super_admin', 'exam_manager'],
+      true,
+    );
+    return this.exams.cancelSchedule(id, scheduleId, admin.id);
   }
 
   @Patch('admin/exams/:id/results')

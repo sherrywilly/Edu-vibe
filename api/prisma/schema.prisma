@@ -41,6 +41,7 @@ model Student {
   location           Location @relation(fields: [locationId], references: [id])
   createdAt          DateTime @default(now())
   attempts           ExamAttempt[]
+  examSelections     ExamScheduleStudent[]
 
   @@index([parentPhone, dob])
 }
@@ -95,6 +96,9 @@ model Exam {
   id              String         @id @default(uuid())
   title           String
   durationMinutes Int
+  passingScore    Int?
+  shuffleQuestions Boolean       @default(false)
+  shuffleOptions   Boolean       @default(false)
   resultsPublished Boolean       @default(false)
   createdAt       DateTime       @default(now())
   questions       ExamQuestion[]
@@ -110,7 +114,11 @@ model ExamQuestion {
   prompt        String
   options       Json
   correctOption Int
+  subject       String       @default("General")
+  marks         Int          @default(1)
+  negativeMarks Int          @default(0)
   answers       ExamAnswer[]
+  reviewFlags   ExamReviewFlag[]
 
   @@unique([examId, position])
 }
@@ -123,8 +131,23 @@ model ExamSchedule {
   location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
   opensAt    DateTime
   closesAt   DateTime
+  durationMinutes Int
+  eligibilityType String @default("location")
+  eligibilityValue String?
+  cancelledAt DateTime?
+  selectedStudents ExamScheduleStudent[]
 
-  @@unique([examId, locationId])
+  @@index([examId])
+}
+
+model ExamScheduleStudent {
+  scheduleId String
+  studentId String
+  schedule ExamSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@id([scheduleId, studentId])
+  @@index([studentId])
 }
 
 model ExamAttempt {
@@ -138,7 +161,10 @@ model ExamAttempt {
   submittedAt DateTime?
   revision    Int          @default(0)
   score       Int?
+  randomizationLayout Json?
   answers     ExamAnswer[]
+  reviewFlags ExamReviewFlag[]
+  focusEvents ExamFocusEvent[]
 
   @@unique([examId, studentId])
   @@index([submittedAt, deadline])
@@ -152,4 +178,23 @@ model ExamAnswer {
   option     Int
 
   @@id([attemptId, questionId])
+}
+
+model ExamReviewFlag {
+  attemptId String
+  questionId String
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question ExamQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@id([attemptId, questionId])
+}
+
+model ExamFocusEvent {
+  id String @id @default(uuid())
+  attemptId String
+  type String
+  createdAt DateTime @default(now())
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
 }

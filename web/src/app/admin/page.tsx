@@ -49,6 +49,7 @@ export default function Admin() {
       <p className="muted">Signed in as {admin.username} ({admin.role.replace("_", " ")}).</p>
       {canManageLocations && <p className="muted">Create a unique link for each registration location.</p>}
       <div className="actions"><Link className="button secondary" href="/admin/exams">{canManageLocations ? "Manage exams" : "View exams"}</Link><Link className="button secondary" href="/admin/students">View students</Link>
+        <Link className="button secondary" href="/admin/attempts">Monitor attempts</Link>
         <Link className="button secondary" href="/admin/locations">Registration windows</Link>
         <Link className="button secondary" href="/admin/options">Registration options</Link>
         {admin.role === "super_admin" && <Link className="button secondary" href="/admin/imports">Import students</Link>}

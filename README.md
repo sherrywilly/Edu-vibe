@@ -9,18 +9,20 @@
 - Phone-and-DOB student login, generic credential errors, registration-ID disambiguation, database-backed sessions and basic database-backed request limits. Consent and optional WhatsApp consent are recorded separately with timestamps and version numbers.
 - Searchable, paginated admin student list without DOB or contact fields, and configurable registration opening and closing times. Login limits use keyed identifiers, temporary cooldowns, and progressive delays.
 - Individual admin accounts use scrypt passwords, with super-admin, exam-manager and reviewer permissions enforced by the API. Legacy shared-password admin sessions are invalidated by the migration. Admins can manage registration options and edit registration windows.
-- Admins can create MCQ exams, schedule them by registration location and publish results. Students can start an eligible exam, save answers, resume, submit and see published scores. Server deadlines and scoring are authoritative. A dedicated BullMQ worker reconciles deadline jobs and periodically sweeps overdue attempts.
+- Admins can create MCQ exams with subjects, marks, optional negative marking and passing scores; publish results; and schedule by registration location, school, district or selected students. Sessions have their own duration and can be edited or cancelled before any attempt for the exam exists. Mixed eligibility scopes are conservatively rejected when their windows overlap. School and district values are self-reported, not proof of membership.
+- Students can start an eligible exam, save answers and review flags, resume, submit and see published scores and subject breakdowns. Optional question and option randomisation is persisted per attempt. Server deadlines and scoring are authoritative. A dedicated BullMQ worker reconciles deadline jobs and periodically sweeps overdue attempts. Optional focus/fullscreen events are informational, may be incomplete, and do not affect scoring.
+- A CSV question import provides an editable preview, validation and explicit review before exam creation; it does not guess correct answers.
 - Admins can preview and confirm small CSV student imports with recorded consent evidence. Filtered student CSV and individual admin-only PDF acknowledgements are available. Imports require review; they do not establish consent or verified contact ownership.
 - Administrators can optionally configure a WhatsApp group invitation per registration location. After registration and on the student dashboard, guardians can choose to open their location's invite; joining is not required and may reveal their phone number to other group members. This does not send messages or verify membership.
 - Synthetic example location seed, and a Docker Compose development environment.
 
 ## Important gaps
 
-PDF/XLSX imports, question imports, bulk PDF/XLSX exports, certificates, QR codes, notifications and provider integrations are **not implemented**. Private document storage is not integrated. No WhatsApp, email, OCR or external PDF provider was tested or configured, and no real messages are sent.
+PDF/XLSX imports, non-CSV question imports, bulk PDF/XLSX exports, certificates, QR codes, notifications and provider integrations are **not implemented**. Private document storage is not integrated. No WhatsApp, email, OCR or external PDF provider was tested or configured, and no real messages are sent.
 
 There is no admin-assisted student credential correction, retention/deletion workflow, comprehensive audit-log viewer, monitoring or comprehensive validation. The application has not had a production security review. Do not deploy it publicly.
 
-Exams are limited to immutable multiple-choice questions with one mark each and scheduling by registration location. Schedules cannot be edited or deleted. Advanced cohort assignment, separate session durations, randomisation, attempt-device leases, question imports, configurable passing criteria, detailed result breakdowns and exam integrity event logs are not implemented. Flags in the exam UI are local to the page and are not saved.
+Questions remain immutable after exam creation. City groups and verified school membership, attempt-device leases and assisted device recovery are not implemented. CSV question import confirmation is not idempotent; if a response is lost, check the exam list before trying again. Do not treat focus events as proof of misconduct.
 
 ## Local setup
 
