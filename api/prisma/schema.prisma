@@ -48,8 +48,32 @@ model Session {
   id        String   @id
   role      String
   studentId String?
+  adminId   String?
+  admin     AdminAccount? @relation(fields: [adminId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  @@index([adminId])
+}
+
+model AdminAccount {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  role         String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+model RegistrationOption {
+  id        String   @id @default(uuid())
+  kind      String
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([kind, name])
+  @@index([kind, active])
 }
 
 model AuditLog {
