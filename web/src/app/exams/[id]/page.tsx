@@ -35,6 +35,11 @@ export default function ExamAttempt() {
   const [deadlineWarning, setDeadlineWarning] = useState("");
   const [remaining, setRemaining] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [flagged, setFlagged] = useState<string[]>([]);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
+  const [fullscreenMessage, setFullscreenMessage] = useState("");
   const answersRef = useRef<Answer[]>([]);
   const revision = useRef(0);
   const editVersion = useRef(0);
@@ -44,6 +49,7 @@ export default function ExamAttempt() {
   const clock = useRef<{ deadline: number; serverNow: number; measured: number } | null>(null);
   const checkingDeadline = useRef(false);
   const finalized = useRef(false);
+  const submitInProgress = useRef(false);
   const mounted = useRef(true);
 
   const syncClock = useCallback((data: Attempt) => {
@@ -65,6 +71,13 @@ export default function ExamAttempt() {
     void load().catch(e => { if (mounted.current) setError(e.message); });
     return () => { mounted.current = false; if (timer.current) clearTimeout(timer.current); };
   }, [load]);
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === document.documentElement);
+    setFullscreenAvailable(Boolean(document.fullscreenEnabled && document.documentElement.requestFullscreen));
+    updateFullscreen();
+    document.addEventListener("fullscreenchange", updateFullscreen);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
+  }, []);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (editVersion.current !== savedVersion.current) { event.preventDefault(); event.returnValue = ""; }
@@ -139,15 +152,27 @@ export default function ExamAttempt() {
     timer.current = setTimeout(() => { void save().catch(() => {}); }, 400);
   }
   async function submit() {
-    if (!window.confirm("Submit your exam? You cannot change your answers afterwards.")) return;
+    if (submitInProgress.current || finalized.current || remaining === 0) return;
+    submitInProgress.current = true;
     setSubmitting(true); setError("");
     if (timer.current) clearTimeout(timer.current);
     try {
       await save();
+      if (finalized.current) return;
       const data = await api(`${path}/submit`, "POST");
+      finalized.current = data.status === "submitted";
       setAttempt(data); setAnswers(data.answers); answersRef.current = data.answers;
     } catch (e) { setError(e instanceof Error ? e.message : "Could not submit. Please try again."); }
-    finally { setSubmitting(false); }
+    finally { submitInProgress.current = false; if (mounted.current) setSubmitting(false); }
+  }
+  async function toggleFullscreen() {
+    setFullscreenMessage("");
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      setFullscreenMessage("Full screen isn't available right now. You can still take your exam.");
+    }
   }
   function leave() {
     if (editVersion.current !== savedVersion.current && !window.confirm("Some answers are not saved yet. Leave anyway?")) return;
@@ -161,13 +186,34 @@ export default function ExamAttempt() {
     {!attempt ? <>{!error ? <p>Loading your exam…</p> : <><p><Link href="/exams">Back to my exams</Link></p><button onClick={() => void load().catch(e => setError(e.message))}>Try again</button></>}</> :
       attempt.status === "submitted" ? <>
         <p>Your exam has been submitted. {attempt.score != null && attempt.total != null ? `Your score: ${attempt.score} / ${attempt.total}.` : "Your results will appear when they are published."}</p>
+        {fullscreen && <button type="button" onClick={() => void toggleFullscreen()}>Exit full screen</button>}
+        {fullscreenMessage && <p role="status">{fullscreenMessage}</p>}
         <Link className="button" href="/exams">Back to my exams</Link>
       </> : <>
         <p role="timer" aria-label="Time remaining">Time remaining: {remaining === null ? "Checking server time…" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`}</p>
         <p role="status">{saveState === "saved" ? "All answers saved" : saveState === "saving" ? "Saving your answers…" : "Answers not saved yet"}</p>
+        {fullscreenAvailable && <button type="button" onClick={() => void toggleFullscreen()}>{fullscreen ? "Exit full screen" : "Use full screen (optional)"}</button>}
+        {fullscreenMessage && <p role="status">{fullscreenMessage}</p>}
         {saveState === "unsaved" && error && <div className="actions"><button type="button" onClick={() => void save().catch(() => {})}>Retry saving</button><button type="button" onClick={() => {
           if (window.confirm("Reload the saved answers? Unsaved changes on this device will be lost.")) void load().catch(e => setError(e.message));
         }}>Reload saved answers</button></div>}
+        {reviewing ? <section className="card" aria-labelledby="review-heading">
+          <h2 id="review-heading">Let&apos;s check your answers</h2>
+          <p>You answered {answers.length} of {attempt.questions.length} questions. You can go back to any question before submitting.</p>
+          <p>Flags are reminders on this page only and won&apos;t be saved if you leave or reload.</p>
+          <ul>
+            {attempt.questions.map((item, index) => <li key={item.id}>
+              <button type="button" disabled={submitting} onClick={() => { setQuestionIndex(index); setReviewing(false); }}>
+                Question {index + 1}: {answers.some(answer => answer.questionId === item.id) ? "Answered" : "Not answered"}{flagged.includes(item.id) ? " · Flagged for review" : ""}
+              </button>
+            </li>)}
+          </ul>
+          <p>Once you submit, you can&apos;t change your answers.</p>
+          <div className="actions">
+            <button type="button" disabled={submitting} onClick={() => setReviewing(false)}>Keep working</button>
+            <button type="button" disabled={submitting || remaining === 0} onClick={() => void submit()}>{submitting ? "Submitting…" : "Submit my exam"}</button>
+          </div>
+        </section> : <>
         {question && <section className="card">
           <p>Question {questionIndex + 1} of {attempt.questions.length}</p>
           <fieldset disabled={submitting || remaining === 0}>
@@ -177,14 +223,19 @@ export default function ExamAttempt() {
             </label>)}
           </fieldset>
           <button type="button" disabled={submitting || remaining === 0 || !answers.some(answer => answer.questionId === question.id)} onClick={() => choose(question.id, null)}>Clear answer</button>
+          <button type="button" disabled={submitting || remaining === 0} aria-pressed={flagged.includes(question.id)} onClick={() => setFlagged(current => current.includes(question.id) ? current.filter(id => id !== question.id) : [...current, question.id])}>
+            {flagged.includes(question.id) ? "Remove review flag" : "Flag for review"}
+          </button>
+          {flagged.includes(question.id) && <p>Flagged for review</p>}
         </section>}
         <div className="actions">
           <button type="button" disabled={questionIndex === 0 || submitting} onClick={() => setQuestionIndex(index => index - 1)}>Previous</button>
           <button type="button" disabled={questionIndex >= attempt.questions.length - 1 || submitting} onClick={() => setQuestionIndex(index => index + 1)}>Next</button>
-          <button type="button" disabled={submitting || remaining === 0} onClick={() => void submit()}>{submitting ? "Submitting…" : "Submit exam"}</button>
+          <button type="button" disabled={submitting || remaining === 0} onClick={() => setReviewing(true)}>Review and submit</button>
           <button type="button" disabled={submitting} onClick={leave}>Back to my exams</button>
         </div>
         <p>{answers.length} of {attempt.questions.length} answered. Your timer keeps running if you leave.</p>
+        </>}
       </>}
   </div>;
 }
