@@ -1,10 +1,10 @@
 import {
-  BadRequestException, Body, Controller, Get, Param, Post, Req, Res,
+  BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res,
   UnauthorizedException, ForbiddenException, NotFoundException,
   HttpException,
 } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { createHash, randomBytes, randomInt, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import type { Request, Response } from 'express';
 
 const db = new PrismaClient();
@@ -34,19 +34,35 @@ const date = (value: unknown) => {
   return result;
 };
 const equal = (a: string, b: string) => timingSafeEqual(Buffer.from(hash(a)), Buffer.from(hash(b)));
+const optionalInstant = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    throw new BadRequestException('Dates must include a timezone.');
+  }
+  const datePart = value.slice(0, 10);
+  const calendarDate = new Date(`${datePart}T00:00:00Z`);
+  if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== datePart) throw new BadRequestException('Enter a valid date and time.');
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new BadRequestException('Enter a valid date and time.');
+  return parsed;
+};
 
 @Controller()
 export class AppController {
   private async limit(key: string, max: number, seconds: number) {
     const now = new Date();
     const expires = new Date(now.getTime() + seconds * 1000);
+    const secret = process.env.RATE_LIMIT_SECRET;
+    if (!secret || secret.length < 32) throw new HttpException('Rate limiting is not configured.', 503);
+    const limitKey = createHmac('sha256', secret).update(key).digest('hex');
     const rows = await db.$queryRaw<{ count: number }[]>`
-      INSERT INTO "RateLimit" ("key", "count", "expiresAt") VALUES (${hash(key)}, 1, ${expires})
+      INSERT INTO "RateLimit" ("key", "count", "expiresAt") VALUES (${limitKey}, 1, ${expires})
       ON CONFLICT ("key") DO UPDATE SET
         "count" = CASE WHEN "RateLimit"."expiresAt" <= ${now} THEN 1 ELSE "RateLimit"."count" + 1 END,
         "expiresAt" = CASE WHEN "RateLimit"."expiresAt" <= ${now} THEN ${expires} ELSE "RateLimit"."expiresAt" END
       RETURNING "count"`;
     if (rows[0].count > max) throw new HttpException('Too many requests. Please try again later.', 429);
+    return rows[0].count;
   }
 
   private csrf(req: Request) {
@@ -117,7 +133,8 @@ export class AppController {
     let dob: Date;
     try { parentPhone = phone(body.phone); dob = date(body.dob); }
     catch { throw new UnauthorizedException('The supplied credentials could not be verified.'); }
-    await this.limit(`student-account:${parentPhone}`, 10, 900);
+    const attempts = await this.limit(`student-account:${parentPhone}`, 10, 900);
+    if (attempts > 3) await new Promise(resolve => setTimeout(resolve, Math.min((attempts - 3) * 250, 1500)));
     const matches = await db.student.findMany({ where: { parentPhone, dob }, select: { id: true, registrationId: true } });
     if (matches.length > 1 && !body.registrationId) return { requiresRegistrationId: true };
     const student = matches.length === 1 ? matches[0] : matches.find(s => typeof body.registrationId === 'string' && equal(s.registrationId, body.registrationId.trim()));
@@ -156,9 +173,12 @@ export class AppController {
     this.csrf(req);
     await this.session(req, 'admin');
     const name = text(body.name);
+    const opensAt = optionalInstant(body.opensAt);
+    const closesAt = optionalInstant(body.closesAt);
+    if (opensAt && closesAt && opensAt >= closesAt) throw new BadRequestException('Closing time must be after opening time.');
     for (let i = 0; i < 5; i++) {
       try {
-        const location = await db.location.create({ data: { name, key: randomKey() } });
+        const location = await db.location.create({ data: { name, key: randomKey(), opensAt, closesAt } });
         await db.auditLog.create({ data: { action: 'location.created', actor: 'bootstrap-admin', target: location.id } });
         return location;
       } catch (error: unknown) {
@@ -166,6 +186,30 @@ export class AppController {
       }
     }
     throw new HttpException('Could not generate a unique link. Try again.', 503);
+  }
+
+  @Get('admin/students')
+  async students(@Req() req: Request, @Query('search') search?: string, @Query('locationId') locationId?: string, @Query('page') pageValue?: string) {
+    await this.session(req, 'admin');
+    if ((search !== undefined && (typeof search !== 'string' || search.length > 120)) ||
+        (locationId !== undefined && (typeof locationId !== 'string' || locationId.length > 100)) ||
+        (pageValue !== undefined && (typeof pageValue !== 'string' || !/^[1-9]\d{0,5}$/.test(pageValue)))) {
+      throw new BadRequestException('Invalid filter.');
+    }
+    const page = pageValue ? Number(pageValue) : 1;
+    const term = search?.trim();
+    const where = {
+      ...(locationId ? { locationId } : {}),
+      ...(term ? { OR: ['name', 'registrationId', 'school', 'district', 'className', 'medium', 'syllabus', 'locality'].map(field => ({ [field]: { contains: term, mode: 'insensitive' as const } })) } : {}),
+    };
+    const [students, total] = await Promise.all([
+      db.student.findMany({
+        where, select: { id: true, registrationId: true, name: true, school: true, district: true, className: true, medium: true, syllabus: true, locality: true, location: { select: { name: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 50, take: 50,
+      }),
+      db.student.count({ where }),
+    ]);
+    return { students, total, page };
   }
 
   @Post('admin/locations/:id/deactivate')

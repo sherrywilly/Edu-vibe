@@ -17,13 +17,13 @@ Admin authentication currently uses a single bootstrap password and an admin/stu
 
 ## Local setup
 
-1. Copy `.env.example` to `.env`. Set a long unique `ADMIN_PASSWORD` (at least 20 characters) and a database password containing URL-safe characters. The example values are placeholders only.
+1. Copy `.env.example` to `.env`. Set a long unique `ADMIN_PASSWORD` (at least 20 characters), a separate random `RATE_LIMIT_SECRET` (at least 32 characters), and a database password containing URL-safe characters. The example values are placeholders only.
 2. Run `docker compose up --build`. The API applies the checked-in migration before starting. Visit <http://localhost:3000/admin>, sign in and create a location. Open its link to register a synthetic student.
 3. Optionally create a synthetic location with `docker compose exec api node prisma/seed.cjs`; the command prints its registration link. It does not create real students.
 
 Compose runs HTTP with development-mode cookies and is intended only for local use. `WEB_ORIGIN` must exactly match the browser origin. For a different origin, update it and the published port. `NEXT_PUBLIC_BRAND_NAME` changes the displayed brand. The web API proxy destination is configured at build time with `API_URL`.
 
-For running without Compose, start PostgreSQL, then in `api` run `npm ci`, set `DATABASE_URL`, `ADMIN_PASSWORD` and `WEB_ORIGIN`, and run `npx prisma migrate deploy`, `npx prisma generate`, and `npm run start:dev`. In `web`, run `npm ci` and `npm run dev`. The default web proxy points to `http://localhost:4000`.
+For running without Compose, start PostgreSQL, then in `api` run `npm ci`, set `DATABASE_URL`, `ADMIN_PASSWORD`, `RATE_LIMIT_SECRET` and `WEB_ORIGIN`, and run `npx prisma migrate deploy`, `npx prisma generate`, and `npm run start:dev`. In `web`, run `npm ci` and `npm run dev`. The default web proxy points to `http://localhost:4000`.
 
 ## Checks
 
