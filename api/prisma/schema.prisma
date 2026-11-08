@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Location {
+  id        String    @id @default(uuid())
+  name      String
+  key       String    @unique @db.VarChar(7)
+  active    Boolean   @default(true)
+  opensAt   DateTime?
+  closesAt  DateTime?
+  students  Student[]
+  createdAt DateTime  @default(now())
+}
+
+model Student {
+  id                 String   @id @default(uuid())
+  registrationId     String   @unique
+  name               String
+  dob                DateTime @db.Date
+  school             String
+  district           String
+  className          String
+  medium             String
+  syllabus           String
+  parentPhone        String
+  whatsappPhone      String
+  locality           String
+  guardianConsentAt  DateTime
+  guardianConsentVersion String
+  whatsappConsentAt  DateTime?
+  whatsappConsentVersion String?
+  locationId         String
+  location           Location @relation(fields: [locationId], references: [id])
+  createdAt          DateTime @default(now())
+
+  @@index([parentPhone, dob])
+}
+
+model Session {
+  id        String   @id
+  role      String
+  studentId String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  actor     String
+  target    String?
+  createdAt DateTime @default(now())
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+}
