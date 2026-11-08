@@ -87,11 +87,18 @@ export class ExamDeadlineWorker {
           (client) => client.status === 'ready',
         );
       if (!ready()) return false;
-      await Promise.all([
-        queueClient.get(this.queue.toKey('health-check')),
-        workerClient.get(this.queue.toKey('health-check')),
+      const writes = await Promise.allSettled([
+        queueClient.set(this.queue.toKey('health-check:queue'), '1', { EX: 10 }),
+        workerClient.set(this.queue.toKey('health-check:worker'), '1', {
+          EX: 10,
+        }),
       ]);
-      return ready();
+      return (
+        ready() &&
+        writes.every(
+          (write) => write.status === 'fulfilled' && write.value === 'OK',
+        )
+      );
     });
   }
 

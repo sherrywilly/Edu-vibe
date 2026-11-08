@@ -5,8 +5,8 @@ import { createWorkerHealthServer } from './health-worker-server';
 
 const workerEvents: Record<string, () => void> = {};
 const queueEvents: Record<string, () => void> = {};
-const ping = jest.fn();
-const redis = { status: 'ready', get: ping };
+const write = jest.fn();
+const redis = { status: 'ready', set: write };
 const running = jest.fn();
 const paused = jest.fn();
 jest.mock('bullmq', () => ({
@@ -45,7 +45,7 @@ describe('worker health', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     redis.status = 'ready';
-    ping.mockResolvedValue('PONG');
+    write.mockResolvedValue('OK');
     running.mockReturnValue(true);
     paused.mockReturnValue(false);
     service = {
@@ -73,8 +73,18 @@ describe('worker health', () => {
     await request(server)
       .get('/health')
       .expect(200, { status: 'ok', database: true, redis: true });
+    expect(write).toHaveBeenCalledWith(
+      'bull:exam-deadlines:health-check:queue',
+      '1',
+      { EX: 10 },
+    );
+    expect(write).toHaveBeenCalledWith(
+      'bull:exam-deadlines:health-check:worker',
+      '1',
+      { EX: 10 },
+    );
     await request(server).get('/other').expect(404);
-    ping.mockRejectedValue(new Error('redis password'));
+    write.mockRejectedValueOnce(new Error('READONLY redis password'));
     const failure = await request(server).get('/health').expect(503);
     expect(failure.body).toEqual({
       status: 'unavailable',
@@ -86,7 +96,7 @@ describe('worker health', () => {
     workerEvents['ioredis:close']();
     expect((await worker.health()).redis).toBe(false);
     redis.status = 'ready';
-    ping.mockResolvedValue('PONG');
+    write.mockResolvedValue('OK');
     expect((await worker.health()).redis).toBe(true);
   });
 
@@ -133,9 +143,11 @@ describe('worker health', () => {
     expect((await worker.health()).redis).toBe(false);
   });
 
-  it('bounds a stalled Redis ping and does not enqueue repeated probes', async () => {
+  it('bounds stalled writes even when another write fails', async () => {
     jest.useFakeTimers();
-    ping.mockImplementation(() => new Promise(() => {}));
+    write
+      .mockRejectedValueOnce(new Error('READONLY'))
+      .mockImplementation(() => new Promise(() => {}));
     worker.start();
     await jest.advanceTimersByTimeAsync(0);
     const first = worker.health();
@@ -143,6 +155,10 @@ describe('worker health', () => {
     await jest.advanceTimersByTimeAsync(2_000);
     expect((await first).redis).toBe(false);
     expect((await second).redis).toBe(false);
-    expect(ping).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(2);
+    const third = worker.health();
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect((await third).redis).toBe(false);
+    expect(write).toHaveBeenCalledTimes(2);
   });
 });
